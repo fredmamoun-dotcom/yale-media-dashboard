@@ -1,0 +1,16 @@
+{
+  "name": "yale-media-dashboard",
+  "version": "1.0.0",
+  "description": "Yale University Daily Media & Research Report Dashboard with automated email delivery",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.0",
+    "dotenv": "^16.4.0"
+  }
+}
