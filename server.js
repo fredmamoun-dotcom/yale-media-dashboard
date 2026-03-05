@@ -130,18 +130,45 @@ Return 0-5 items. Only genuine Yale University items. If nothing qualifies, retu
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 1000,
+        max_tokens: 4096,
         system: systemPrompt,
         messages: [{ role: "user", content: `Search for: ${query}` }],
         tools: [{ type: "web_search_20250305", name: "web_search" }],
       }),
     });
     const data = await res.json();
+    
+    // Log response for debugging
+    if (data.error) {
+      console.error(`[search] API error for "${query}":`, JSON.stringify(data.error));
+      return [];
+    }
+    
+    const contentTypes = (data.content || []).map(b => b.type);
+    console.log(`[search] Response types for "${query}": ${contentTypes.join(", ")}`);
+    
+    // Check if model stopped because it wants to use a tool (web search)
+    if (data.stop_reason === "tool_use") {
+      console.log(`[search] Model wants to use tool but stopped. May need multi-turn.`);
+    }
+    
     const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-    if (!text.trim()) return [];
-    const match = text.replace(/```json|```/g, "").trim().match(/\[[\s\S]*\]/);
-    if (!match) return [];
+    
+    if (!text.trim()) {
+      console.log(`[search] No text in response for "${query}". Full response: ${JSON.stringify(data).slice(0, 800)}`);
+      return [];
+    }
+    
+    console.log(`[search] Text response for "${query}": ${text.slice(0, 300)}`);
+    
+    const cleaned = text.replace(/```json|```/g, "").trim();
+    const match = cleaned.match(/\[[\s\S]*\]/);
+    if (!match) {
+      console.log(`[search] No JSON array found in response for "${query}"`);
+      return [];
+    }
     const items = JSON.parse(match[0]);
+    console.log(`[search] Parsed ${items.length} items for "${query}"`);
     return Array.isArray(items) ? items : [];
   } catch (err) {
     console.error(`[search] Error for "${query}":`, err.message);
