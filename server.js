@@ -130,37 +130,84 @@ Return 0-5 items. Only genuine Yale University items. If nothing qualifies, retu
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 4096,
+        max_tokens: 16000,
         system: systemPrompt,
         messages: [{ role: "user", content: `Search for: ${query}` }],
         tools: [{ type: "web_search_20250305", name: "web_search" }],
       }),
     });
-    const data = await res.json();
-    
-    // Log response for debugging
-    if (data.error) {
-      console.error(`[search] API error for "${query}":`, JSON.stringify(data.error));
+
+    // Check HTTP status before parsing JSON
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.log(`[search] HTTP ${res.status} for "${query}": ${errorText.slice(0, 500)}`);
       return [];
     }
-    
+
+    let data = await res.json();
+
+    // Log response for debugging
+    if (data.error) {
+      console.log(`[search] API error for "${query}":`, JSON.stringify(data.error));
+      return [];
+    }
+
     const contentTypes = (data.content || []).map(b => b.type);
-    console.log(`[search] Response types for "${query}": ${contentTypes.join(", ")}`);
-    
+    console.log(`[search] "${query}" => stop=${data.stop_reason}, types=[${contentTypes.join(",")}], usage=${JSON.stringify(data.usage || {})}`);
+
+    // Check for web search tool errors in the response
+    const toolErrors = (data.content || []).filter(
+      (b) => b.type === "web_search_tool_result" && b.content?.type === "web_search_tool_result_error"
+    );
+    if (toolErrors.length > 0) {
+      console.log(`[search] Web search error for "${query}": ${JSON.stringify(toolErrors.map(e => e.content))}`);
+    }
+
+    // Handle pause_turn: the API paused a long-running turn, continue it
+    if (data.stop_reason === "pause_turn") {
+      console.log(`[search] pause_turn for "${query}", continuing...`);
+      const contRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 16000,
+          system: systemPrompt,
+          messages: [
+            { role: "user", content: `Search for: ${query}` },
+            { role: "assistant", content: data.content },
+          ],
+          tools: [{ type: "web_search_20250305", name: "web_search" }],
+        }),
+      });
+      if (!contRes.ok) {
+        const contErr = await contRes.text();
+        console.log(`[search] Continuation HTTP ${contRes.status} for "${query}": ${contErr.slice(0, 500)}`);
+        return [];
+      }
+      data = await contRes.json();
+      const contTypes = (data.content || []).map(b => b.type);
+      console.log(`[search] Continuation for "${query}" => stop=${data.stop_reason}, types=[${contTypes.join(",")}]`);
+    }
+
     // Check if model stopped because it wants to use a tool (web search)
     if (data.stop_reason === "tool_use") {
-      console.log(`[search] Model wants to use tool but stopped. May need multi-turn.`);
+      console.log(`[search] Model wants to use tool but stopped for "${query}". May need multi-turn.`);
     }
-    
+
     const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-    
+
     if (!text.trim()) {
       console.log(`[search] No text in response for "${query}". Full response: ${JSON.stringify(data).slice(0, 800)}`);
       return [];
     }
-    
+
     console.log(`[search] Text response for "${query}": ${text.slice(0, 300)}`);
-    
+
     const cleaned = text.replace(/```json|```/g, "").trim();
     const match = cleaned.match(/\[[\s\S]*\]/);
     if (!match) {
@@ -171,7 +218,7 @@ Return 0-5 items. Only genuine Yale University items. If nothing qualifies, retu
     console.log(`[search] Parsed ${items.length} items for "${query}"`);
     return Array.isArray(items) ? items : [];
   } catch (err) {
-    console.error(`[search] Error for "${query}":`, err.message);
+    console.log(`[search] Error for "${query}":`, err.message, err.stack);
     return [];
   }
 }
@@ -226,7 +273,7 @@ async function generateReport(apiKey) {
     }
 
     if (i < SEARCH_QUERIES.length - 1) {
-      await new Promise((r) => setTimeout(r, 1000));
+      await new Promise((r) => setTimeout(r, 2000));
     }
   }
 
@@ -406,7 +453,7 @@ async function sendReportEmail(report, dashboardUrl) {
     console.log(`[mailer] Sent to ${recipients.length} recipient(s): ${info.messageId}`);
     return { sent: true, messageId: info.messageId, recipients };
   } catch (err) {
-    console.error("[mailer] Send failed:", err.message);
+    console.log("[mailer] Send failed:", err.message);
     return { sent: false, reason: err.message };
   }
 }
@@ -427,14 +474,14 @@ async function runScheduledReport() {
   isGenerating = true;
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) { console.error("[cron] ANTHROPIC_API_KEY not set"); return; }
+    if (!apiKey) { console.log("[cron] ANTHROPIC_API_KEY not set"); return; }
     const report = await generateReport(apiKey);
     latestReport = report;
     reportHistory.unshift(report);
     if (reportHistory.length > 14) reportHistory = reportHistory.slice(0, 14);
     lastEmailResult = await sendReportEmail(report, DASHBOARD_URL);
   } catch (err) {
-    console.error("[cron] Report generation failed:", err);
+    console.log("[cron] Report generation failed:", err);
   } finally {
     isGenerating = false;
   }
@@ -579,4 +626,37 @@ app.listen(PORT, () => {
   console.log(`[server] Yale Media Dashboard running at http://localhost:${PORT}`);
   console.log(`[server] API key: ${process.env.ANTHROPIC_API_KEY ? "yes" : "NO — set ANTHROPIC_API_KEY"}`);
   console.log(`[server] SMTP: ${process.env.SMTP_USER ? "yes" : "NO — set SMTP_* for email"}`);
+
+  // Startup diagnostic: test API key and web search capability
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (apiKey) {
+    (async () => {
+      try {
+        console.log("[startup] Testing Anthropic API connection...");
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 100,
+            messages: [{ role: "user", content: "Reply with exactly: API_OK" }],
+          }),
+        });
+        if (!res.ok) {
+          const errText = await res.text();
+          console.log(`[startup] API test FAILED: HTTP ${res.status} — ${errText.slice(0, 300)}`);
+        } else {
+          const data = await res.json();
+          const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
+          console.log(`[startup] API test OK: model=${data.model}, response="${text.slice(0, 50)}"`);
+        }
+      } catch (err) {
+        console.log(`[startup] API test FAILED: ${err.message}`);
+      }
+    })();
+  }
 });
