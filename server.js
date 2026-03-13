@@ -120,7 +120,7 @@ Each item must have these fields:
 
 Return 0-5 items. Only genuine Yale University items. If nothing qualifies, return [].`;
 
-  try {
+  const makeRequest = async (messages) => {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -132,86 +132,76 @@ Return 0-5 items. Only genuine Yale University items. If nothing qualifies, retu
         model: "claude-sonnet-4-20250514",
         max_tokens: 16000,
         system: systemPrompt,
-        messages: [{ role: "user", content: `Search for: ${query}` }],
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
+        messages,
+        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
       }),
     });
-
-    // Check HTTP status before parsing JSON
     if (!res.ok) {
       const errorText = await res.text();
       console.log(`[search] HTTP ${res.status} for "${query}": ${errorText.slice(0, 500)}`);
-      return [];
+      return null;
     }
+    return res.json();
+  };
 
-    let data = await res.json();
+  try {
+    let messages = [{ role: "user", content: `Search for: ${query}` }];
+    let data = await makeRequest(messages);
+    if (!data) return [];
 
-    // Log response for debugging
     if (data.error) {
       console.log(`[search] API error for "${query}":`, JSON.stringify(data.error));
       return [];
     }
 
-    const contentTypes = (data.content || []).map(b => b.type);
-    console.log(`[search] "${query}" => stop=${data.stop_reason}, types=[${contentTypes.join(",")}], usage=${JSON.stringify(data.usage || {})}`);
+    // Loop to handle pause_turn and tool_use — keep going until end_turn or max 5 rounds
+    for (let round = 0; round < 5 && data.stop_reason !== "end_turn"; round++) {
+      const types = (data.content || []).map(b => b.type);
+      console.log(`[search] "${query}" round=${round} stop=${data.stop_reason} types=[${types.join(",")}]`);
 
-    // Check for web search tool errors in the response
-    const toolErrors = (data.content || []).filter(
-      (b) => b.type === "web_search_tool_result" && b.content?.type === "web_search_tool_result_error"
-    );
-    if (toolErrors.length > 0) {
-      console.log(`[search] Web search error for "${query}": ${JSON.stringify(toolErrors.map(e => e.content))}`);
-    }
-
-    // Handle pause_turn: the API paused a long-running turn, continue it
-    if (data.stop_reason === "pause_turn") {
-      console.log(`[search] pause_turn for "${query}", continuing...`);
-      const contRes = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 16000,
-          system: systemPrompt,
-          messages: [
-            { role: "user", content: `Search for: ${query}` },
-            { role: "assistant", content: data.content },
-          ],
-          tools: [{ type: "web_search_20250305", name: "web_search" }],
-        }),
-      });
-      if (!contRes.ok) {
-        const contErr = await contRes.text();
-        console.log(`[search] Continuation HTTP ${contRes.status} for "${query}": ${contErr.slice(0, 500)}`);
-        return [];
+      // Check for web search errors
+      const toolErrors = (data.content || []).filter(
+        (b) => b.type === "web_search_tool_result" && b.content?.type === "web_search_tool_result_error"
+      );
+      if (toolErrors.length > 0) {
+        console.log(`[search] Web search error for "${query}": ${JSON.stringify(toolErrors.map(e => e.content))}`);
       }
-      data = await contRes.json();
-      const contTypes = (data.content || []).map(b => b.type);
-      console.log(`[search] Continuation for "${query}" => stop=${data.stop_reason}, types=[${contTypes.join(",")}]`);
+
+      if (data.stop_reason === "pause_turn" || data.stop_reason === "tool_use") {
+        // Continue the conversation — pass back everything the model returned
+        messages = [
+          ...messages,
+          { role: "assistant", content: data.content },
+        ];
+        data = await makeRequest(messages);
+        if (!data) return [];
+        if (data.error) {
+          console.log(`[search] API error on continuation for "${query}":`, JSON.stringify(data.error));
+          return [];
+        }
+      } else {
+        // Unknown stop reason
+        console.log(`[search] Unexpected stop_reason="${data.stop_reason}" for "${query}"`);
+        break;
+      }
     }
 
-    // Check if model stopped because it wants to use a tool (web search)
-    if (data.stop_reason === "tool_use") {
-      console.log(`[search] Model wants to use tool but stopped for "${query}". May need multi-turn.`);
-    }
+    const contentTypes = (data.content || []).map(b => b.type);
+    console.log(`[search] "${query}" final => stop=${data.stop_reason}, types=[${contentTypes.join(",")}], usage=${JSON.stringify(data.usage || {})}`);
 
     const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
 
     if (!text.trim()) {
-      console.log(`[search] No text in response for "${query}". Full response: ${JSON.stringify(data).slice(0, 800)}`);
+      console.log(`[search] No text in response for "${query}". Content: ${JSON.stringify(data.content).slice(0, 800)}`);
       return [];
     }
 
-    console.log(`[search] Text response for "${query}": ${text.slice(0, 300)}`);
+    console.log(`[search] Text for "${query}": ${text.slice(0, 300)}`);
 
     const cleaned = text.replace(/```json|```/g, "").trim();
     const match = cleaned.match(/\[[\s\S]*\]/);
     if (!match) {
-      console.log(`[search] No JSON array found in response for "${query}"`);
+      console.log(`[search] No JSON array found for "${query}". Text was: ${text.slice(0, 500)}`);
       return [];
     }
     const items = JSON.parse(match[0]);
@@ -524,6 +514,54 @@ app.get("/api/status", (req, res) => {
     schedules: { morning: morningCron, evening: eveningCron, timezone: tz },
     reportsInHistory: reportHistory.length,
   });
+});
+
+// Debug endpoint — runs a single search and returns raw API response
+app.get("/api/test-search", async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: "No ANTHROPIC_API_KEY set" });
+
+  const query = req.query.q || "Yale University news today";
+  console.log(`[test] Running test search: "${query}"`);
+
+  try {
+    const apiRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 4096,
+        messages: [{ role: "user", content: `Search the web for: ${query}. Return a brief summary of what you find.` }],
+        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
+      }),
+    });
+
+    const status = apiRes.status;
+    const data = await apiRes.json();
+
+    // Summarize the response
+    const contentTypes = (data.content || []).map(b => b.type);
+    const textBlocks = (data.content || []).filter(b => b.type === "text").map(b => b.text);
+    const searchResults = (data.content || []).filter(b => b.type === "web_search_tool_result");
+
+    res.json({
+      http_status: status,
+      stop_reason: data.stop_reason,
+      content_types: contentTypes,
+      text_response: textBlocks.join("\n").slice(0, 2000),
+      search_result_count: searchResults.length,
+      has_error: !!data.error,
+      error: data.error || null,
+      usage: data.usage || null,
+      raw_content_preview: JSON.stringify(data.content).slice(0, 3000),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
 });
 
 // Dashboard HTML
