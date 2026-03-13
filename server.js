@@ -101,24 +101,21 @@ async function runSingleSearch(query, cutoffISO, apiKey) {
     timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: true,
   });
 
-  const systemPrompt = `You are a news research assistant for Yale University's Office of Public Affairs.
-Search for VERY RECENT news about Yale University using the query provided.
+  const systemPrompt = `You are a news research assistant. Search the web for recent news about Yale University matching the user's query.
 
-CRITICAL TIME CONSTRAINT: Only include items published within the last 12 hours.
-The current time is approximately ${new Date().toISOString()}.
-The 12-hour cutoff is ${cutoffISO}. Only include articles published AFTER ${cutoffStr} ${cutoffTimeStr} ET.
-If an article does not have a clear publication date within this window, EXCLUDE it.
+Focus on articles from the past few days. Today is approximately ${new Date().toISOString().slice(0, 10)}.
 
-Return ONLY a JSON array (no markdown, no backticks, no preamble) of news items.
-Each item must have these fields:
-- "headline": string (max 12 words, AP style)
+After searching, return a JSON array of news items you found. Each item must have these fields:
+- "headline": string (concise title)
 - "source": string (publication name)
-- "url": string (article URL, use "#" if unknown)
-- "summary": string (1-2 sentences, neutral AP style, 12-25 words, mention specific Yale entity)
+- "url": string (article URL, or "#" if unknown)
+- "summary": string (1-2 sentence summary)
 - "tags": array of strings (topic tags)
-- "pub_time": string (ISO 8601 publication timestamp if available, "" if unknown)
+- "pub_time": string (ISO 8601 date if available, or "" if unknown)
 
-Return 0-5 items. Only genuine Yale University items. If nothing qualifies, return [].`;
+Return 0-5 items as a JSON array. Only include items genuinely about Yale University (not Yale locks, Yale appliances, etc). If nothing relevant is found, return [].
+
+IMPORTANT: Your response must end with the JSON array. Format: [{"headline":"...","source":"...","url":"...","summary":"...","tags":[...],"pub_time":"..."}]`;
 
   const makeRequest = async (messages) => {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
