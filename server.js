@@ -13,17 +13,61 @@ const PORT = process.env.PORT || 3000;
 // REPORT ENGINE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const SEARCH_QUERIES = [
-  "Yale University news today",
-  "Yale University research today 2026",
-  "Yale New Haven Hospital news today",
-  "Yale Law School news today",
-  "Yale faculty announcement today",
-  "Yale athletics results today",
-  "Yale School of Medicine news today",
-  "Yale University policy today",
-  "Yale grants partnerships today",
-  "Yale student campus news today",
+// ─── Publication-targeted searches ───────────────────────────────────────────
+// Each group targets specific publication domains via allowed_domains.
+// The API's web_search tool will only return results from these domains.
+
+const SEARCHES = [
+  // Yale's own sources
+  {
+    query: "Yale University",
+    domains: ["news.yale.edu", "yaledailynews.com", "medicine.yale.edu", "law.yale.edu", "seas.yale.edu", "jackson.yale.edu", "som.yale.edu", "gsas.yale.edu", "divinity.yale.edu"],
+  },
+  // Major national newspapers
+  {
+    query: "Yale University",
+    domains: ["nytimes.com", "washingtonpost.com", "wsj.com", "apnews.com", "reuters.com", "usatoday.com"],
+  },
+  // TV / broadcast news
+  {
+    query: "Yale",
+    domains: ["cnn.com", "nbcnews.com", "abcnews.go.com", "cbsnews.com", "foxnews.com", "bbc.com", "msnbc.com"],
+  },
+  // Local Connecticut
+  {
+    query: "Yale",
+    domains: ["ctmirror.org", "nhregister.com", "courant.com", "ctpost.com", "newhavenindependent.org", "wtnh.com", "nbcconnecticut.com"],
+  },
+  // Higher education press
+  {
+    query: "Yale",
+    domains: ["chronicle.com", "insidehighered.com", "timeshighereducation.com", "thefire.org", "highereddive.com"],
+  },
+  // Science & research
+  {
+    query: "Yale research",
+    domains: ["nature.com", "science.org", "statnews.com", "scientificamerican.com", "eurekalert.org", "nih.gov", "newscientist.com"],
+  },
+  // Sports
+  {
+    query: "Yale athletics Bulldogs",
+    domains: ["espn.com", "si.com", "ivyleague.com", "ncaa.com", "yalebulldogs.com", "theathletic.com"],
+  },
+  // Business & finance
+  {
+    query: "Yale",
+    domains: ["forbes.com", "fortune.com", "bloomberg.com", "cnbc.com", "businessinsider.com", "barrons.com"],
+  },
+  // Policy, politics & public media
+  {
+    query: "Yale",
+    domains: ["politico.com", "thehill.com", "axios.com", "npr.org", "pbs.org", "wnpr.org", "propublica.com"],
+  },
+  // Broad catch-all searches (no domain restriction)
+  { query: "Yale University news" },
+  { query: "Yale New Haven Hospital news" },
+  { query: "Yale research study published" },
+  { query: "Yale Law School" },
 ];
 
 const FALSE_POSITIVES = [
@@ -92,7 +136,7 @@ function dedup(items) {
   });
 }
 
-async function runSingleSearch(query, cutoffISO, apiKey) {
+async function runSingleSearch(query, cutoffISO, apiKey, domains) {
   const cutoffDate = new Date(cutoffISO);
   const cutoffStr = cutoffDate.toLocaleDateString("en-US", {
     timeZone: "America/New_York", month: "long", day: "numeric", year: "numeric",
@@ -130,7 +174,10 @@ IMPORTANT: Your response must end with the JSON array. Format: [{"headline":"...
         max_tokens: 16000,
         system: systemPrompt,
         messages,
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
+        tools: [Object.assign(
+          { type: "web_search_20250305", name: "web_search", max_uses: 5 },
+          domains && domains.length > 0 ? { allowed_domains: domains } : {}
+        )],
       }),
     });
     if (!res.ok) {
@@ -221,11 +268,12 @@ async function generateReport(apiKey) {
   let allRaw = [];
   let stats = { falsePositives: 0, timeFiltered: 0, duplicates: 0 };
 
-  for (let i = 0; i < SEARCH_QUERIES.length; i++) {
-    const q = SEARCH_QUERIES[i];
-    console.log(`[report] (${i + 1}/${SEARCH_QUERIES.length}) Searching: ${q}`);
+  for (let i = 0; i < SEARCHES.length; i++) {
+    const search = SEARCHES[i];
+    const label = search.domains ? `${search.query} [${search.domains.length} domains]` : search.query;
+    console.log(`[report] (${i + 1}/${SEARCHES.length}) Searching: ${label}`);
 
-    const results = await runSingleSearch(q, cutoffISO, apiKey);
+    const results = await runSingleSearch(search.query, cutoffISO, apiKey, search.domains);
 
     for (const r of results) {
       if (r.pub_time) {
@@ -259,7 +307,7 @@ async function generateReport(apiKey) {
       });
     }
 
-    if (i < SEARCH_QUERIES.length - 1) {
+    if (i < SEARCHES.length - 1) {
       await new Promise((r) => setTimeout(r, 2000));
     }
   }
