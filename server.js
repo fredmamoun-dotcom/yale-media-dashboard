@@ -212,11 +212,11 @@ IMPORTANT: Your response must end with the JSON array. Format: [{"headline":"...
 
 async function generateReport(apiKey) {
   const now = new Date();
-  const cutoffTime = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+  const cutoffTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const cutoffISO = cutoffTime.toISOString();
 
   console.log(`[report] Starting report generation at ${now.toISOString()}`);
-  console.log(`[report] 12-hour cutoff: ${cutoffISO}`);
+  console.log(`[report] 24-hour cutoff: ${cutoffISO}`);
 
   let allRaw = [];
   let stats = { falsePositives: 0, timeFiltered: 0, duplicates: 0 };
