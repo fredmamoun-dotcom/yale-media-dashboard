@@ -170,12 +170,12 @@ IMPORTANT: Your response must end with the JSON array. Format: [{"headline":"...
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6",
         max_tokens: 16000,
         system: systemPrompt,
         messages,
         tools: [Object.assign(
-          { type: "web_search_20250305", name: "web_search", max_uses: 5 },
+          { type: "web_search_20260209", name: "web_search", max_uses: 5 },
           domains && domains.length > 0 ? { allowed_domains: domains } : {}
         )],
       }),
@@ -578,10 +578,10 @@ app.get("/api/test-search", async (req, res) => {
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-sonnet-4-6",
         max_tokens: 4096,
         messages: [{ role: "user", content: `Search the web for: ${query}. Return a brief summary of what you find.` }],
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
+        tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 3 }],
       }),
     });
 
@@ -724,7 +724,7 @@ app.listen(PORT, () => {
             "anthropic-version": "2023-06-01",
           },
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
+            model: "claude-sonnet-4-6",
             max_tokens: 100,
             messages: [{ role: "user", content: "Reply with exactly: API_OK" }],
           }),
